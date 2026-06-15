@@ -4,7 +4,7 @@ const fs = require('fs');
 const GITHUB_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 const OWNER = 'pharmcoder-kr';
 const REPO = 'prescription_printer_parsing';
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const TAG = `v${VERSION}`;
 
 async function createRelease() {
@@ -14,24 +14,22 @@ async function createRelease() {
     process.exit(1);
   }
 
-  const releaseNotes = `## v1.2.0: 범용 약봉투 파서 (v3) — 양식 등록 없이 자동 파싱
+  const releaseNotes = `## v1.2.1: 시럽 단일약 봉투 파싱 지원
 
 ### 주요 변경사항
-- **범용 구조 추론 파서 (v3)**: 내장 유형 이름에 의존하지 않고 PDF에서 헤더·약물 행·숫자 열을 자동 추론
-- **양식 미등록 시 자동 파싱**: UBCARE 등 새 약봉투도 샘플 등록·앱 업데이트 없이 파싱 시도
-- **동적 숫자 열 분리**: 약물 행 끝 숫자 2~4열을 자동 판별, 용량이 약품명에 붙었는지도 추론
-- **양식 학습 v3**: 샘플 PDF 등록 시 헤더 지문·행 패턴을 저장해 동일 양식 안정 파싱
+- **stacked_compact 파서 추가**: 약품명과 용법(535 등)이 여러 줄로 나뉜 FastReport 시럽 단일약 봉투 파싱
+- 약품명 줄바꿈·\`*\` 접두사·3자리 압축 용법(예: 535 = 5mL/3회/5일) 자동 처리
+- 양식 학습 v3에 stacked_compact 구조 자동 감지 추가
 
-### 지원 구조 (자동 감지)
-- 헤더 아래 약물 행 표 (UBCARE 등)
-- 헤더 위 숫자 블록 + 약품명 (FastReport 등)
-- 1회투약량 / 1일투여횟수 / 총투약일수 라벨 블록
+### 해결된 문제
+- \`Fast Report Document_...pdf\` 형식에서 환자명만 읽히고 약물 0개로 실패하던 문제
+- 「양식 분석 결과가 불완전합니다」 오류 (약물 0개)
 
 ### 설치 방법
 아래의 \`auto-syrup-pdf-setup-${VERSION}.exe\` 파일을 다운로드하여 실행하세요.
 
 ### 업데이트
-v1.1.0 이하 사용자는 프로그램 실행 시 자동 업데이트 알림을 받을 수 있습니다.`;
+v1.2.0 이하 사용자는 프로그램 실행 시 자동 업데이트 알림을 받을 수 있습니다.`;
 
   const filesToUpload = [
     {
@@ -70,7 +68,7 @@ v1.1.0 이하 사용자는 프로그램 실행 시 자동 업데이트 알림을
         `https://api.github.com/repos/${OWNER}/${REPO}/releases`,
         {
           tag_name: TAG,
-          name: `v${VERSION} - 범용 약봉투 파서 (v3)`,
+          name: `v${VERSION} - 시럽 단일약 봉투 파싱 지원`,
           body: releaseNotes,
           draft: false,
           prerelease: false
@@ -103,7 +101,7 @@ v1.1.0 이하 사용자는 프로그램 실행 시 자동 업데이트 알림을
         releaseResponse = await axios.patch(
           `https://api.github.com/repos/${OWNER}/${REPO}/releases/${existing.id}`,
           {
-            name: `v${VERSION} - 범용 약봉투 파서 (v3)`,
+            name: `v${VERSION} - 시럽 단일약 봉투 파싱 지원`,
             body: releaseNotes,
             draft: false,
             prerelease: false

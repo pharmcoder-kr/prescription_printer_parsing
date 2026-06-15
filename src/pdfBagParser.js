@@ -463,6 +463,68 @@ function pathBasename(filePath) {
     return filePath.split(/[\\/]/).pop() || '';
 }
 
+function isStackedDrugFragment(line, hasBuffer) {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+    if (/^\d{3,4}$/.test(trimmed)) return false;
+    if (/^20\d{6}/.test(trimmed)) return false;
+    if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return false;
+    if (/^[0-9,.\s]+$/.test(trimmed)) return false;
+    if (/백색|차광|복약만료|의약품검색|54981245|APP|^<>|약이 궁금/.test(trimmed)) return false;
+    if (/^\(\s*만\s*\d+세/.test(trimmed)) return false;
+    if (/약품명.*투약량|일수.*횟수.*투약량/.test(trimmed.replace(/\s+/g, ''))) return false;
+
+    const drugKeyword = new RegExp(DRUG_KEYWORD_PATTERN);
+    if (drugKeyword.test(trimmed)) return true;
+    if (/^\*/.test(trimmed)) return true;
+    if (hasBuffer && /^[가-힣A-Za-z_\(\)\/]+$/.test(trimmed) && trimmed.length < 30) return true;
+    return false;
+}
+
+function extractItemsStackedCompact(lines) {
+    const items = [];
+    const seen = new Set();
+    let nameBuffer = '';
+
+    const flushCompact = (digits, buffer) => {
+        const dosage = parseCompactDosage(digits);
+        const pillName = cleanDrugName(buffer);
+        if (!dosage || !pillName || pillName.length < 2) return;
+        const key = `${pillName}|${dosage.volume}|${dosage.daily}|${dosage.period}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        items.push({
+            pill_code: '',
+            pill_name: pillName,
+            volume: dosage.volume,
+            daily: dosage.daily,
+            period: dosage.period,
+            total: dosage.volume * dosage.daily * dosage.period,
+            line_number: items.length + 1
+        });
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+
+        if (/^\d{3,4}$/.test(line)) {
+            if (nameBuffer) {
+                flushCompact(line, nameBuffer);
+                nameBuffer = '';
+            }
+            continue;
+        }
+
+        if (isStackedDrugFragment(line, Boolean(nameBuffer))) {
+            nameBuffer += line.replace(/^\*+/, '');
+        } else if (nameBuffer) {
+            nameBuffer = '';
+        }
+    }
+
+    return items;
+}
+
 function parseCompactDosage(value) {
     const digits = String(value).trim();
     if (!/^\d{3,4}$/.test(digits)) return null;
@@ -835,6 +897,7 @@ function parseBagText(text, parserConfig = DEFAULT_PARSER, filePath = '') {
     }
 
     const strategies = [
+        ['stacked_compact', extractItemsStackedCompact],
         ['ubcare_table', extractItemsUbcareTable],
         ['column_table', extractItemsColumnTable],
         ['per_drug_block', extractItemsPerDrugBlock],
@@ -930,6 +993,7 @@ module.exports = {
     findColumnTableHeaderIndex,
     findUbcareTableHeaderIndex,
     extractItemsUbcareTable,
+    extractItemsStackedCompact,
     finalizeBagParseResult,
     isTestPdf,
     normalizeText,

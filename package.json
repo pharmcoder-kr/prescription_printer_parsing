@@ -1,6 +1,6 @@
 {
   "name": "auto-syrup-pdf",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "오토시럽 PDF - 약봉투 PDF 처방연동",
   "main": "main.js",
   "scripts": {

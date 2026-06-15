@@ -435,9 +435,26 @@ function learnLabeledBlocks(lines) {
     };
 }
 
+function learnStackedCompact(lines) {
+    const { extractItemsStackedCompact } = require('./pdfBagParser');
+    const medicines = extractItemsStackedCompact(lines);
+    if (!medicines.length) return null;
+    return {
+        regionType: 'stacked_compact',
+        headerFingerprint: '',
+        headerMinScore: 0,
+        footerKeywords: [...DEFAULT_FOOTER_KEYWORDS],
+        stopPatterns: [...DEFAULT_STOP_PATTERNS]
+    };
+}
+
 function parseWithLearnedRules(lines, learned) {
     if (!learned) return [];
 
+    if (learned.regionType === 'stacked_compact') {
+        const { extractItemsStackedCompact } = require('./pdfBagParser');
+        return extractItemsStackedCompact(lines);
+    }
     if (learned.regionType === 'rows_after_header' || learned.strategy === 'header_table') {
         return collectRowsAfterHeader(lines, learned, learned.rowFormat || inferRowParserCompat(learned));
     }
@@ -466,6 +483,7 @@ function tryAutoGenericParse(lines) {
     const hypotheses = [
         learnRowsAfterHeader(lines),
         learnMatrixBeforeHeader(lines),
+        learnStackedCompact(lines),
         learnLabeledBlocks(lines)
     ].filter(Boolean);
 

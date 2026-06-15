@@ -2138,7 +2138,8 @@ function updatePdfBagTemplateStatus() {
                 const regionLabel = {
                     rows_after_header: '표 형식 (헤더 아래 약물 행)',
                     matrix_before_header: '세로 열 형식 (헤더 위 숫자 블록)',
-                    labeled_blocks: '용법 라벨 블록 형식'
+                    labeled_blocks: '용법 라벨 블록 형식',
+                    stacked_compact: '시럽 단일약 (약품명+용법 분리 행)'
                 }[pdfBagTemplate.learned.regionType || pdfBagTemplate.learned.strategy] || '자동 학습';
                 statusEl.textContent = `학습된 양식 (v3): ${regionLabel} — 샘플 PDF 구조를 저장해 동일 양식을 파싱합니다.`;
             } else if (pdfBagTemplate.templateVersion >= 2 && pdfBagTemplate.learned) {
