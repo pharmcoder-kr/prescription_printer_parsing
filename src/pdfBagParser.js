@@ -38,7 +38,7 @@ const DEFAULT_PARSER = {
         '^환자(?:명)?\\s*[:：]\\s*(.+)$',
         '^성\\s*명\\s*[:：]\\s*(.+)$'
     ],
-    prescriptionNoPattern: '\\b(20\\d{6}-\\d{3,6})\\b',
+    prescriptionNoPattern: '\\b(20\\d{6}-0*\\d+)\\b',
     skipLinePatterns: [
         '^\\s*$',
         '^[-=_]{3,}$',
@@ -342,6 +342,92 @@ function extractItemsColumnTable(lines) {
     return items;
 }
 
+function findUbcareTableHeaderIndex(lines) {
+    for (let i = 0; i < lines.length; i++) {
+        const compact = lines[i].replace(/\s+/g, '');
+        if (/약품명.*투약량.*횟수.*일수/.test(compact)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+function cleanUbcareDrugName(raw) {
+    let name = String(raw || '').trim();
+    name = name.replace(/(\d+\/\d+(?:\.\d+)?m?g?)$/i, '').trim();
+    name = name.replace(/(\d+(?:\.\d+)?(?:mg|%)?)$/i, '').trim();
+    name = name.replace(/(\d+(?:\.\d+)?)m$/i, '').trim();
+    name = name.replace(/[\/\\]\s*$/, '').trim();
+    name = name.replace(/\s+/g, '');
+    return name || String(raw || '').trim();
+}
+
+function extractVolumeFromUbcareName(raw) {
+    const match = String(raw || '').trim().match(/(\d+(?:\.\d+)?)(?:mg|m|%)?$/i);
+    if (match) return parseFloat(match[1]);
+    const slashMatch = String(raw || '').trim().match(/(\d+)\/(\d+)/);
+    if (slashMatch) return parseFloat(slashMatch[1]);
+    return 1;
+}
+
+function parseUbcareDrugLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('-') || /처방조제|본인의 약/.test(trimmed)) {
+        return null;
+    }
+
+    const fourNums = trimmed.match(/^(.+?)\s+(\d+(?:\.\d+)?)\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s*$/);
+    if (fourNums) {
+        const namePart = fourNums[1].trim();
+        return {
+            pill_name: cleanUbcareDrugName(namePart),
+            volume: parseFloat(fourNums[2]),
+            daily: parseFloat(fourNums[3]),
+            period: parseFloat(fourNums[4]),
+            total: parseFloat(fourNums[5])
+        };
+    }
+
+    const threeNums = trimmed.match(/^(.+?)\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s*$/);
+    if (!threeNums) return null;
+
+    const namePart = threeNums[1].trim();
+    return {
+        pill_name: cleanUbcareDrugName(namePart),
+        volume: extractVolumeFromUbcareName(namePart),
+        daily: parseFloat(threeNums[2]),
+        period: parseFloat(threeNums[3]),
+        total: parseFloat(threeNums[4])
+    };
+}
+
+function extractItemsUbcareTable(lines) {
+    const headerIdx = findUbcareTableHeaderIndex(lines);
+    if (headerIdx < 0) return [];
+
+    const items = [];
+    for (let i = headerIdx + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^[-=]/.test(line) || /본인의 약|처방조제된 약/.test(line)) break;
+        if (/^\[/.test(line) || /정씩\d+회/.test(line)) break;
+
+        const parsed = parseUbcareDrugLine(line);
+        if (!parsed || !parsed.pill_name || !parsed.daily || !parsed.period) continue;
+
+        items.push({
+            pill_code: '',
+            pill_name: parsed.pill_name,
+            volume: parsed.volume,
+            daily: parsed.daily,
+            period: parsed.period,
+            total: parsed.total || parsed.volume * parsed.daily * parsed.period,
+            line_number: items.length + 1
+        });
+    }
+
+    return items;
+}
+
 function extractPrescriptionNo(text, pattern) {
     const matches = [...text.matchAll(new RegExp(pattern, 'g'))].map((m) => m[1]);
     if (!matches.length) return null;
@@ -478,6 +564,8 @@ function extractItemsPerDrugBlock(lines) {
 
 function extractMedicinesByLayout(lines, layout) {
     switch (layout) {
+        case 'ubcare_table':
+            return extractItemsUbcareTable(lines);
         case 'column_table':
             return extractItemsColumnTable(lines);
         case 'per_drug_block':
@@ -534,7 +622,7 @@ function parseBagTextWithTemplate(text, template, filePath = '') {
     const receiptDate = extractReceiptDate(normalized, prescriptionNo, filePath);
     const layout = template.dosageLayout || 'per_drug_block';
 
-    const tryLayouts = [layout, 'column_table', 'per_drug_block', 'fastreport', 'inline'];
+    const tryLayouts = [layout, 'ubcare_table', 'column_table', 'per_drug_block', 'fastreport', 'inline'];
     const uniqueLayouts = [...new Set(tryLayouts)];
 
     let medicines = [];
@@ -707,6 +795,14 @@ function parseBagText(text, parserConfig = DEFAULT_PARSER, filePath = '') {
     const config = { ...DEFAULT_PARSER, ...parserConfig };
 
     if (config.customTemplate) {
+        if (config.customTemplate.templateVersion >= 2 && config.customTemplate.learned) {
+            const { parseBagTextWithLearnedTemplate } = require('./pdfBagTemplateLearner');
+            const learnedResult = parseBagTextWithLearnedTemplate(text, config.customTemplate, filePath);
+            if (learnedResult.parseSuccess) {
+                return learnedResult;
+            }
+        }
+
         const templateResult = parseBagTextWithTemplate(text, config.customTemplate, filePath);
         if (templateResult.parseSuccess) {
             return templateResult;
@@ -733,6 +829,7 @@ function parseBagText(text, parserConfig = DEFAULT_PARSER, filePath = '') {
     const receiptDate = extractReceiptDate(normalized, prescriptionNo, filePath);
 
     const strategies = [
+        ['ubcare_table', extractItemsUbcareTable],
         ['column_table', extractItemsColumnTable],
         ['per_drug_block', extractItemsPerDrugBlock],
         ['fastreport', extractItemsFastReport],
@@ -825,6 +922,10 @@ module.exports = {
     extractItemsFastReport,
     extractItemsInline,
     findColumnTableHeaderIndex,
+    findUbcareTableHeaderIndex,
+    extractItemsUbcareTable,
+    finalizeBagParseResult,
+    isTestPdf,
     normalizeText,
     normalizeLines,
     cleanDrugName,

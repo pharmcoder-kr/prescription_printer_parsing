@@ -2,52 +2,18 @@ const {
     DEFAULT_PARSER,
     normalizeText,
     normalizeLines,
-    cleanDrugName,
-    DRUG_KEYWORD_PATTERN,
     extractPatientName,
     extractPrescriptionNo,
     extractReceiptDate,
-    extractItemsColumnTable,
-    extractItemsPerDrugBlock,
-    extractItemsFastReport,
-    extractItemsInline,
-    parseBagTextWithTemplate,
-    findColumnTableHeaderIndex
+    finalizeBagParseResult,
+    isTestPdf,
+    parseBagTextWithTemplate
 } = require('./pdfBagParser');
-
-const DOSAGE_LAYOUTS = ['column_table', 'per_drug_block', 'inline', 'compact_next_line', 'fastreport'];
-
-function detectDosageLayout(lines) {
-    const joined = lines.join('\n');
-
-    if (findColumnTableHeaderIndex(lines) >= 0) {
-        return 'column_table';
-    }
-
-    for (const line of lines) {
-        if (line.includes('1회투약량') && line.includes('1일투여횟수') && line.includes('총투약일수')) {
-            return 'inline';
-        }
-    }
-
-    if (/1회투약량[\s\n]+\d+[\s\n]+1일투여횟수[\s\n]+\d+[\s\n]+총투약일수[\s\n]+\d+/i.test(joined)) {
-        return 'per_drug_block';
-    }
-
-    for (let i = 0; i < lines.length - 1; i++) {
-        if (lines[i].includes('1회투약량') && lines[i].includes('1일투여횟수') && lines[i].includes('총투약일수')) {
-            if (/^\d{3,4}$/.test(lines[i + 1])) {
-                return 'compact_next_line';
-            }
-        }
-    }
-
-    if (/1회투약량/i.test(joined) && /1일투여횟수/i.test(joined) && /총투약일수/i.test(joined)) {
-        return 'per_drug_block';
-    }
-
-    return 'fastreport';
-}
+const {
+    learnBagTemplate,
+    parseBagTextWithLearnedTemplate,
+    scoreLearnedTemplate
+} = require('./pdfBagTemplateLearner');
 
 function scoreParseResult(result) {
     if (!result) return 0;
@@ -62,18 +28,43 @@ function analyzeBagTemplate(text, fileName = '') {
     const normalized = normalizeText(text);
     const lines = normalizeLines(text);
 
-    const patientName = extractPatientName(normalized, DEFAULT_PARSER.patientNamePatterns);
+    const patientName = extractPatientName(normalized, DEFAULT_PARSER.patientNamePatterns, lines);
     const prescriptionNo = extractPrescriptionNo(normalized, DEFAULT_PARSER.prescriptionNoPattern);
     const receiptDate = extractReceiptDate(normalized, prescriptionNo, fileName);
 
+    const learnedTemplate = learnBagTemplate(normalized, fileName);
+    if (learnedTemplate) {
+        const { score, result } = scoreLearnedTemplate(normalized, learnedTemplate, fileName);
+        if (score > 0 && result.medicines.length > 0) {
+            return {
+                template: learnedTemplate,
+                preview: {
+                    patientName: result.patientName,
+                    prescriptionNo: result.prescriptionNo,
+                    receiptDate: result.receiptDate,
+                    medicines: result.medicines,
+                    parseSuccess: result.parseSuccess,
+                    parserUsed: result.parserUsed
+                },
+                detectedFields: {
+                    patientName,
+                    prescriptionNo,
+                    receiptDate,
+                    lineCount: lines.length,
+                    learnedStrategy: learnedTemplate.learned.strategy
+                }
+            };
+        }
+    }
+
     const layoutScores = {};
+    const DOSAGE_LAYOUTS = ['ubcare_table', 'column_table', 'per_drug_block', 'inline', 'compact_next_line', 'fastreport'];
     for (const layout of DOSAGE_LAYOUTS) {
         const template = {
             templateVersion: 1,
             dosageLayout: layout,
             patientNamePatterns: DEFAULT_PARSER.patientNamePatterns,
-            prescriptionNoPattern: DEFAULT_PARSER.prescriptionNoPattern,
-            drugKeywordPattern: DRUG_KEYWORD_PATTERN
+            prescriptionNoPattern: DEFAULT_PARSER.prescriptionNoPattern
         };
         const result = parseBagTextWithTemplate(normalized, template, fileName);
         layoutScores[layout] = scoreParseResult(result);
@@ -82,19 +73,13 @@ function analyzeBagTemplate(text, fileName = '') {
     const bestLayout = Object.entries(layoutScores)
         .sort((a, b) => b[1] - a[1])[0][0];
 
-    const detectedLayout = detectDosageLayout(lines);
-    const dosageLayout = layoutScores[detectedLayout] >= layoutScores[bestLayout]
-        ? detectedLayout
-        : bestLayout;
-
     const template = {
         templateVersion: 1,
         sourceFileName: fileName,
         registeredAt: new Date().toISOString(),
-        dosageLayout,
+        dosageLayout: bestLayout,
         patientNamePatterns: DEFAULT_PARSER.patientNamePatterns,
         prescriptionNoPattern: DEFAULT_PARSER.prescriptionNoPattern,
-        drugKeywordPattern: DRUG_KEYWORD_PATTERN,
         layoutScores
     };
 
@@ -133,5 +118,6 @@ function buildParserConfigFromTemplate(template, baseConfig = {}) {
 module.exports = {
     analyzeBagTemplate,
     buildParserConfigFromTemplate,
-    detectDosageLayout
+    learnBagTemplate,
+    parseBagTextWithLearnedTemplate
 };

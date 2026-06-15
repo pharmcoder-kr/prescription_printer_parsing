@@ -2134,7 +2134,16 @@ function updatePdfBagTemplateStatus() {
             fileLabel.textContent = `등록된 양식: ${pdfBagTemplate.sourceFileName || '알 수 없음'} (${pdfBagTemplate.registeredAt ? pdfBagTemplate.registeredAt.substring(0, 10) : ''})`;
         }
         if (statusEl) {
-            statusEl.textContent = `용법 레이아웃: ${pdfBagTemplate.dosageLayout || 'per_drug_block'} — 이 양식으로 PDF를 파싱합니다.`;
+            if (pdfBagTemplate.templateVersion >= 2 && pdfBagTemplate.learned) {
+                const strategyLabel = {
+                    header_table: '표 헤더형 (약품명·투약량·횟수·일수)',
+                    column_matrix: '세로 열형 (일수/횟수/투약량)',
+                    label_block: '용법 라벨형 (1회투약량/1일투여횟수)'
+                }[pdfBagTemplate.learned.strategy] || pdfBagTemplate.learned.strategy;
+                statusEl.textContent = `학습된 양식 (v2): ${strategyLabel} — 샘플 PDF에서 구조를 학습해 파싱합니다.`;
+            } else {
+                statusEl.textContent = `용법 레이아웃: ${pdfBagTemplate.dosageLayout || 'per_drug_block'} — 이 양식으로 PDF를 파싱합니다.`;
+            }
         }
         if (previewEl && pdfBagTemplate.preview) {
             const preview = pdfBagTemplate.preview;
@@ -2205,8 +2214,11 @@ async function registerPdfBagTemplate() {
     pendingPdfBagTemplatePath = '';
 
     const meds = analysis.preview.medicines.map(m => `${m.pill_name}(${m.volume}/${m.daily}/${m.period})`).join(', ');
-    logMessage(`약봉투 양식 등록 완료: ${analysis.preview.patientName} / ${analysis.preview.prescriptionNo} / ${meds}`);
-    showMessage('info', `약봉투 양식이 등록되었습니다.\n환자: ${analysis.preview.patientName}\n접수번호: ${analysis.preview.prescriptionNo}\n약물: ${meds}`);
+    const strategyInfo = analysis.template.templateVersion >= 2 && analysis.template.learned
+        ? `\n학습 방식: ${analysis.template.learned.strategy}`
+        : '';
+    logMessage(`약봉투 양식 등록 완료: ${analysis.preview.patientName} / ${analysis.preview.prescriptionNo} / ${meds}${strategyInfo ? ' (' + analysis.template.learned.strategy + ')' : ''}`);
+    showMessage('info', `약봉투 양식이 등록되었습니다.\n환자: ${analysis.preview.patientName}\n접수번호: ${analysis.preview.prescriptionNo}\n약물: ${meds}${strategyInfo}`);
 
     parsedFiles.clear();
     parsedPrescriptions = {};

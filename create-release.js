@@ -4,7 +4,7 @@ const fs = require('fs');
 const GITHUB_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 const OWNER = 'pharmcoder-kr';
 const REPO = 'prescription_printer_parsing';
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const TAG = `v${VERSION}`;
 
 async function createRelease() {
@@ -14,23 +14,25 @@ async function createRelease() {
     process.exit(1);
   }
 
-  const releaseNotes = `## v1.0.0: 오토시럽 PDF 첫 정식 릴리즈
+  const releaseNotes = `## v1.1.0: 약봉투 양식 학습 및 UBCARE 지원
 
-약봉투 PDF 처방연동 버전의 첫 번째 릴리즈입니다. 기존 EMR(TXT/XML) 연동 프로그램과 별도로 관리됩니다.
+### 주요 변경사항
+- **약봉투 양식 학습 (v2)**: 샘플 PDF 1장 업로드 시 표 구조·약물 행 패턴을 자동 학습하여 같은 양식 PDF 파싱 (앱 업데이트 없이 신규 양식 대응)
+- **UBCARE 약봉투 지원**: 유비케어(UBCARE) 표 헤더형 양식 파싱 추가
+- **실시간 PDF 감시 개선**: 파일 쓰기 완료 대기, 중복 감지 방지, 실패 시 재시도
+- **접수번호·환자명 파싱 개선**: 상·하단 접수번호 불일치, 자릿수 긴 번호 대응
 
-### 주요 기능
-- **약봉투 PDF 연동**: PDF 출력 폴더 실시간 감시 및 자동 파싱
-- **약봉투 양식 입력**: 샘플 PDF 업로드로 양식 분석·저장
-- **약물명 기반 시럽조제기 매칭**: PDF에는 약품코드가 없으므로 약물명으로 기기 연결
-- **column_table / per_drug_block** 등 다양한 약봉투 양식 지원
-- **실시간 파일 감시 안정화**: PDF 쓰기 완료 대기 후 파싱
+### 약봉투 양식 학습 사용법
+1. 환경설정 → 약봉투 양식 입력
+2. 해당 약국의 약봉투 PDF 샘플 1장 선택
+3. 「양식 분석 및 저장」 클릭
+4. 이후 같은 프로그램에서 출력되는 PDF는 자동 파싱
 
 ### 설치 방법
 아래의 \`auto-syrup-pdf-setup-${VERSION}.exe\` 파일을 다운로드하여 실행하세요.
 
 ### 업데이트
-이 버전은 \`pharmcoder-kr/prescription_printer_parsing\` 저장소에서 자동 업데이트됩니다.
-기존 EMR 연동 프로그램(\`prescription\` 저장소)과는 별도입니다.`;
+기존 v1.0.0 사용자는 프로그램 실행 시 자동 업데이트 알림을 받을 수 있습니다.`;
 
   const filesToUpload = [
     {
@@ -69,7 +71,7 @@ async function createRelease() {
         `https://api.github.com/repos/${OWNER}/${REPO}/releases`,
         {
           tag_name: TAG,
-          name: `v${VERSION} - 오토시럽 PDF 첫 정식 릴리즈`,
+          name: `v${VERSION} - 약봉투 양식 학습 및 UBCARE 지원`,
           body: releaseNotes,
           draft: false,
           prerelease: false
@@ -102,7 +104,7 @@ async function createRelease() {
         releaseResponse = await axios.patch(
           `https://api.github.com/repos/${OWNER}/${REPO}/releases/${existing.id}`,
           {
-            name: `v${VERSION} - 오토시럽 PDF 첫 정식 릴리즈`,
+            name: `v${VERSION} - 약봉투 양식 학습 및 UBCARE 지원`,
             body: releaseNotes,
             draft: false,
             prerelease: false
