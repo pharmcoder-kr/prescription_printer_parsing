@@ -171,6 +171,24 @@ function extractPatientNameTableFormat(lines, prescriptionNo) {
     return null;
 }
 
+function extractPatientNamePm2000(lines) {
+    if (lines.length >= 5
+        && lines[0] === lines[4]
+        && /^[가-힣]{2,5}$/.test(lines[0])
+        && !isPatientNameLabel(lines[0])) {
+        return lines[0];
+    }
+
+    for (const line of lines) {
+        const inlineName = line.match(/^([가-힣A-Za-z]{2,20})\s*\(\s*[남여]\s*\/\s*만\s*\d+\s*세/);
+        if (inlineName && !isPatientNameLabel(inlineName[1])) {
+            return inlineName[1].trim();
+        }
+    }
+
+    return null;
+}
+
 function extractPatientName(text, patterns, lines = null) {
     for (const pattern of patterns) {
         const match = text.match(new RegExp(pattern, 'i'));
@@ -181,7 +199,9 @@ function extractPatientName(text, patterns, lines = null) {
     }
 
     const normalizedLines = lines || normalizeLines(text);
-    const prescriptionNo = extractPrescriptionNo(normalizeText(text), DEFAULT_PARSER.prescriptionNoPattern);
+    const pm2000Name = extractPatientNamePm2000(normalizedLines);
+    if (pm2000Name) return pm2000Name;
+    const prescriptionNo = extractPrescriptionNo(normalizeText(text), DEFAULT_PARSER.prescriptionNoPattern, normalizedLines);
     const tableName = extractPatientNameTableFormat(normalizedLines, prescriptionNo);
     if (tableName) return tableName;
 
@@ -401,9 +421,164 @@ function parseUbcareDrugLine(line) {
     };
 }
 
+function isPm2000MatrixLayout(lines, headerIdx) {
+    let drugLines = 0;
+    let idx = headerIdx + 1;
+    while (idx < lines.length && !/^\d+(\.\d+)?$/.test(lines[idx]) && !/^\(/.test(lines[idx])) {
+        if (/[가-힣]/.test(lines[idx])) drugLines++;
+        idx++;
+    }
+    return drugLines >= 2 && idx < lines.length && /^\d+(\.\d+)?$/.test(lines[idx]);
+}
+
+function isPm2000DrugStartLine(line) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed || !/^[가-힣*]/.test(trimmed)) return false;
+    if (/^(흰색|연녹|초록|분홍|백색|연분홍|식전|개봉|전문가|처방|위장|어지러|운전|적절한|위에)/.test(trimmed)) {
+        return false;
+    }
+    return /(?:정|캡슐|시럽|산제|츄정)(?:\(|_|$|\d)|(?:산)(?:\(|_|$)/.test(trimmed);
+}
+
+function mergePm2000DrugLineChunks(rawLines) {
+    const names = [];
+    let buffer = '';
+    const drugMarker = /(?:정|캡슐|시럽|산제|츄정)|(?:산)(?:\(|_|$)/;
+
+    const flushBuffer = () => {
+        if (!buffer || !drugMarker.test(buffer)) {
+            buffer = '';
+            return;
+        }
+        const cleaned = cleanDrugName(buffer);
+        if (cleaned.length >= 2) names.push(cleaned);
+        buffer = '';
+    };
+
+    for (const line of rawLines) {
+        if (/^\d+(\.\d+)?$/.test(line) || /^\(/.test(line)) break;
+        const looksLikeDrugStart = isPm2000DrugStartLine(line);
+        if (!buffer && !looksLikeDrugStart) continue;
+        buffer += line;
+        if (drugMarker.test(buffer) && buffer.length >= 4) {
+            flushBuffer();
+        }
+    }
+    flushBuffer();
+    return names;
+}
+
+function collectPm2000CompactDosages(lines) {
+    const entries = [];
+    let nameBuffer = '';
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (/^\d{3,4}$/.test(trimmed)) {
+            const dosage = parseCompactDosage(trimmed);
+            const pillName = cleanDrugName(nameBuffer);
+            if (dosage && pillName.length >= 2) {
+                entries.push({ pillName, dosage });
+            }
+            nameBuffer = '';
+            continue;
+        }
+
+        const looksLikeDrugStart = isPm2000DrugStartLine(trimmed);
+        if (looksLikeDrugStart) {
+            nameBuffer = trimmed.replace(/^\*+/, '');
+            continue;
+        }
+
+        if (nameBuffer && /^[가-힣A-Za-z0-9_\(\)\/%]+$/.test(trimmed) && trimmed.length < 30) {
+            nameBuffer += trimmed;
+        }
+    }
+
+    return entries;
+}
+
+function drugNamesRoughlyMatch(a, b) {
+    const left = String(a || '').replace(/\s+/g, '').slice(0, 6);
+    const right = String(b || '').replace(/\s+/g, '').slice(0, 6);
+    return left && right && (left.includes(right) || right.includes(left));
+}
+
+function findPm2000CompactDosage(lines, drugName) {
+    const entries = collectPm2000CompactDosages(lines);
+    return entries.find((entry) => drugNamesRoughlyMatch(drugName, entry.pillName))?.dosage || null;
+}
+
+function extractItemsPm2000Matrix(lines) {
+    const headerIdx = findUbcareTableHeaderIndex(lines);
+    if (headerIdx < 0 || !isPm2000MatrixLayout(lines, headerIdx)) return [];
+
+    const nameLines = [];
+    let idx = headerIdx + 1;
+    while (idx < lines.length && !/^\d+(\.\d+)?$/.test(lines[idx]) && !/^\(/.test(lines[idx])) {
+        nameLines.push(lines[idx]);
+        idx++;
+    }
+
+    const drugNames = mergePm2000DrugLineChunks(nameLines);
+    if (!drugNames.length) return [];
+
+    const numerics = [];
+    while (idx < lines.length && /^\d+(\.\d+)?$/.test(lines[idx])) {
+        numerics.push(parseFloat(lines[idx]));
+        idx++;
+    }
+    if (!numerics.length) return [];
+
+    const volumes = [];
+    const ints = [];
+    for (const value of numerics) {
+        if (value > 0 && value < 1) {
+            volumes.push(value);
+        } else {
+            ints.push(Math.round(value));
+        }
+    }
+
+    const half = Math.ceil(ints.length / 2);
+    const periodRow = ints.slice(0, half);
+    const dailyRow = ints.slice(half);
+    const items = [];
+
+    for (let i = 0; i < drugNames.length; i++) {
+        let volume = volumes[i];
+        let period = periodRow[i];
+        let daily = dailyRow[i];
+
+        if ((!volume || volume <= 0) && period > 0 && daily > 0) {
+            const compactDosage = findPm2000CompactDosage(lines, drugNames[i]);
+            if (compactDosage) {
+                volume = compactDosage.volume;
+                daily = compactDosage.daily;
+                period = compactDosage.period;
+            }
+        }
+
+        if (!volume || !daily || !period) continue;
+
+        items.push({
+            pill_code: '',
+            pill_name: drugNames[i],
+            volume,
+            daily,
+            period,
+            total: Math.round(volume * daily * period * 1000) / 1000,
+            line_number: items.length + 1
+        });
+    }
+
+    return items;
+}
+
 function extractItemsUbcareTable(lines) {
     const headerIdx = findUbcareTableHeaderIndex(lines);
     if (headerIdx < 0) return [];
+    if (isPm2000MatrixLayout(lines, headerIdx)) return [];
 
     const items = [];
     for (let i = headerIdx + 1; i < lines.length; i++) {
@@ -428,11 +603,29 @@ function extractItemsUbcareTable(lines) {
     return items;
 }
 
-function extractPrescriptionNo(text, pattern) {
+function extractPrescriptionNoPm2000(lines) {
+    for (let i = 0; i < Math.min(12, lines.length); i++) {
+        if (!/^20\d{2}-\d{2}-\d{2}$/.test(lines[i])) continue;
+        const date = lines[i].replace(/-/g, '');
+        if (i + 1 < lines.length && /^\d{1,6}$/.test(lines[i + 1])) {
+            return `${date}-${String(lines[i + 1]).padStart(5, '0')}`;
+        }
+        if (i > 0 && /^\d{1,6}$/.test(lines[i - 1])) {
+            return `${date}-${String(lines[i - 1]).padStart(5, '0')}`;
+        }
+    }
+    return null;
+}
+
+function extractPrescriptionNo(text, pattern, lines = null) {
     const matches = [...text.matchAll(new RegExp(pattern, 'g'))].map((m) => m[1]);
-    if (!matches.length) return null;
-    matches.sort((a, b) => b.length - a.length);
-    return matches[0];
+    if (matches.length) {
+        matches.sort((a, b) => b.length - a.length);
+        return matches[0];
+    }
+
+    const normalizedLines = lines || normalizeLines(text);
+    return extractPrescriptionNoPm2000(normalizedLines);
 }
 
 function extractReceiptDate(text, prescriptionNo, filePath) {
@@ -680,7 +873,7 @@ function parseBagTextWithTemplate(text, template, filePath = '') {
     }
 
     const patientName = extractPatientName(normalized, patientPatterns, lines);
-    const prescriptionNo = extractPrescriptionNo(normalized, prescriptionPattern);
+    const prescriptionNo = extractPrescriptionNo(normalized, prescriptionPattern, lines);
     const receiptDate = extractReceiptDate(normalized, prescriptionNo, filePath);
     const layout = template.dosageLayout || 'per_drug_block';
 
@@ -887,7 +1080,7 @@ function parseBagText(text, parserConfig = DEFAULT_PARSER, filePath = '') {
     }
 
     const patientName = extractPatientName(normalized, config.patientNamePatterns || [], lines);
-    const prescriptionNo = extractPrescriptionNo(normalized, config.prescriptionNoPattern);
+    const prescriptionNo = extractPrescriptionNo(normalized, config.prescriptionNoPattern, lines);
     const receiptDate = extractReceiptDate(normalized, prescriptionNo, filePath);
 
     const { parseBagTextGenericAuto } = require('./pdfBagTemplateLearner');
@@ -897,6 +1090,7 @@ function parseBagText(text, parserConfig = DEFAULT_PARSER, filePath = '') {
     }
 
     const strategies = [
+        ['pm2000_matrix', extractItemsPm2000Matrix],
         ['stacked_compact', extractItemsStackedCompact],
         ['ubcare_table', extractItemsUbcareTable],
         ['column_table', extractItemsColumnTable],
@@ -992,7 +1186,9 @@ module.exports = {
     extractItemsInline,
     findColumnTableHeaderIndex,
     findUbcareTableHeaderIndex,
+    isPm2000MatrixLayout,
     extractItemsUbcareTable,
+    extractItemsPm2000Matrix,
     extractItemsStackedCompact,
     finalizeBagParseResult,
     isTestPdf,

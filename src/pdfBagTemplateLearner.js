@@ -455,6 +455,10 @@ function parseWithLearnedRules(lines, learned) {
         const { extractItemsStackedCompact } = require('./pdfBagParser');
         return extractItemsStackedCompact(lines);
     }
+    if (learned.regionType === 'matrix_after_header') {
+        const { extractItemsPm2000Matrix } = require('./pdfBagParser');
+        return extractItemsPm2000Matrix(lines);
+    }
     if (learned.regionType === 'rows_after_header' || learned.strategy === 'header_table') {
         return collectRowsAfterHeader(lines, learned, learned.rowFormat || inferRowParserCompat(learned));
     }
@@ -479,8 +483,27 @@ function inferRowParserCompat(learned) {
     return { trailingNumericCount: 3, doseEmbeddedInName: true, explicitTotalColumn: true };
 }
 
+function learnPm2000MatrixAfterHeader(lines) {
+    const { findUbcareTableHeaderIndex, isPm2000MatrixLayout, extractItemsPm2000Matrix } = require('./pdfBagParser');
+    const headerIdx = findUbcareTableHeaderIndex(lines);
+    if (headerIdx < 0 || !isPm2000MatrixLayout(lines, headerIdx)) return null;
+
+    const medicines = extractItemsPm2000Matrix(lines);
+    if (!medicines.length) return null;
+
+    return {
+        regionType: 'matrix_after_header',
+        headerFingerprint: compactLine(lines[headerIdx]),
+        headerMinScore: 2,
+        matrixColumnOrder: ['volume', 'period', 'daily'],
+        footerKeywords: [...DEFAULT_FOOTER_KEYWORDS],
+        stopPatterns: [...DEFAULT_STOP_PATTERNS]
+    };
+}
+
 function tryAutoGenericParse(lines) {
     const hypotheses = [
+        learnPm2000MatrixAfterHeader(lines),
         learnRowsAfterHeader(lines),
         learnMatrixBeforeHeader(lines),
         learnStackedCompact(lines),
@@ -534,7 +557,7 @@ function parseBagTextWithLearnedTemplate(text, template, filePath = '') {
     const patientPatterns = template.patientNamePatterns || DEFAULT_PARSER.patientNamePatterns;
     const prescriptionPattern = template.prescriptionNoPattern || DEFAULT_PARSER.prescriptionNoPattern;
     const patientName = extractPatientName(normalized, patientPatterns, lines);
-    const prescriptionNo = extractPrescriptionNo(normalized, prescriptionPattern);
+    const prescriptionNo = extractPrescriptionNo(normalized, prescriptionPattern, lines);
     const receiptDate = extractReceiptDate(normalized, prescriptionNo, filePath);
 
     let medicines = parseWithLearnedRules(lines, learned);
@@ -574,7 +597,7 @@ function parseBagTextGenericAuto(text, filePath = '') {
     }
 
     const patientName = extractPatientName(normalized, DEFAULT_PARSER.patientNamePatterns, lines);
-    const prescriptionNo = extractPrescriptionNo(normalized, DEFAULT_PARSER.prescriptionNoPattern);
+    const prescriptionNo = extractPrescriptionNo(normalized, DEFAULT_PARSER.prescriptionNoPattern, lines);
     const receiptDate = extractReceiptDate(normalized, prescriptionNo, filePath);
     const { medicines, learned } = tryAutoGenericParse(lines);
 
