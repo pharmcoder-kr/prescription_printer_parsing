@@ -1,0 +1,4 @@
+{
+  "profile": "auto",
+  "comment": "profile: auto | fastreport | inline. auto는 FastReport·인라인·일반 형식을 순서대로 시도합니다."
+}

@@ -1,0 +1,155 @@
+{
+  "name": "auto-syrup-pdf",
+  "version": "1.0.0",
+  "description": "오토시럽 PDF - 약봉투 PDF 처방연동",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron-forge start",
+    "dev": "electron . --dev",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "build": "electron-builder",
+    "dist": "electron-builder --publish=never",
+    "build-installer": "electron-builder --win --x64 --config.compression=maximum --config.forceCodeSigning=false ",
+    "build-portable": "electron-builder --win --x64 --config.compression=maximum --config.win.target=portable",
+    "build-nsis": "electron-builder --win --x64 --config.compression=maximum --config.forceCodeSigning=false --config.win.target=nsis",
+    "build-all": "npm run build && npm run build-nsis",
+    "release": "node create-release.js",
+    "reset": "node reset-local-data.js",
+    "check-token": "node check-token-simple.js",
+    "find-token": "node find-token.js",
+    "set-icon": "node set-exe-icon.js"
+  },
+  "keywords": [
+    "arduino",
+    "connector",
+    "syrup",
+    "dispenser"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron-forge/cli": "^7.10.2",
+    "@electron-forge/maker-squirrel": "^7.10.2",
+    "@electron-forge/maker-wix": "^7.10.2",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.10.2",
+    "@electron-forge/plugin-fuses": "^7.10.2",
+    "@electron/fuses": "^1.8.0",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.13.3",
+    "electron-forge-maker-nsis": "^26.0.12",
+    "electron-packager": "^17.1.2"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "electron-updater": "^6.1.4",
+    "iconv-lite": "^0.6.3",
+    "keytar": "^7.9.0",
+    "moment": "^2.29.4",
+    "node-cron": "^3.0.3",
+    "pdf-parse": "^1.1.4",
+    "uuid": "^9.0.1"
+  },
+  "build": {
+    "appId": "kr.pharmcoder.prescription-printer-parsing",
+    "productName": "오토시럽 PDF",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "pharmcoder-kr",
+      "repo": "prescription_printer_parsing"
+    },
+    "extraResources": [
+      {
+        "from": "assets",
+        "to": "assets",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "files": [
+      "main.js",
+      "renderer.js",
+      "src/**/*",
+      "index.html",
+      "enroll.html",
+      "login.html",
+      "register.html",
+      "shutting-down.html",
+      "preload.js",
+      "styles.css",
+      "gui-editor.js",
+      "layout-editor.js",
+      "connections.json",
+      "auto_dispensing_settings.json",
+      "medicine_transmission_status.json",
+      "transmission_status.json",
+      "prescription_path.txt",
+      "node_modules/axios/**/*",
+      "node_modules/electron-updater/**/*",
+      "node_modules/iconv-lite/**/*",
+      "node_modules/moment/**/*",
+      "node_modules/node-cron/**/*",
+      "node_modules/uuid/**/*",
+      "node_modules/keytar/**/*",
+      "node_modules/pdf-parse/**/*",
+      "!node_modules/**/*.md",
+      "!node_modules/**/*.txt",
+      "!node_modules/**/*.map",
+      "!node_modules/**/*.d.ts",
+      "!node_modules/**/test/**/*",
+      "!node_modules/**/tests/**/*",
+      "!node_modules/**/example/**/*",
+      "!node_modules/**/examples/**/*",
+      "!node_modules/**/docs/**/*",
+      "!node_modules/**/doc/**/*"
+    ],
+    "asar": true,
+    "compression": "maximum",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false,
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "artifactName": "auto-syrup-pdf-setup-${version}.${ext}",
+      "publisherName": "PharmCoder",
+      "verifyUpdateCodeSignature": false,
+      "executableName": "오토시럽"
+    },
+    "nsis": {
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": false,
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "differentialPackage": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "shortcutName": "오토시럽",
+      "runAfterFinish": false,
+      "include": "build/installer.nsh",
+      "menuCategory": false
+    },
+    "forceCodeSigning": false,
+    "cscLink": null,
+    "cscKeyPassword": null,
+    "electronDownload": {
+      "cache": "./electron-cache"
+    }
+  }
+}
