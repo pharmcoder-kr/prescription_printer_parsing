@@ -295,7 +295,14 @@
                                     약봉투 PDF 연동 사용
                                 </label>
                             </div>
-                            <small class="text-muted" id="pdfBagIntegrationHelp">체크 시 약봉투 PDF 폴더를 감시하여 환자·약물 정보를 가져옵니다. (키오스크 접수 등 EMR TXT 미생성 시)</small>
+                            <small class="text-muted d-block mb-2" id="pdfBagIntegrationHelp">체크 시 약봉투 PDF 폴더를 감시하여 환자·약물 정보를 가져옵니다. (키오스크 접수 등 EMR TXT 미생성 시)</small>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="deletePdfAfterParse" onchange="onDeletePdfAfterParseChanged()">
+                                <label class="form-check-label" for="deletePdfAfterParse">
+                                    파싱 후 PDF 자동 삭제
+                                </label>
+                            </div>
+                            <small class="text-muted" id="deletePdfAfterParseHelp">파싱에 성공한 PDF만 폴더에서 삭제합니다. 실패한 파일은 남겨 둡니다.</small>
 
                             <hr class="my-3">
 

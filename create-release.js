@@ -4,7 +4,7 @@ const fs = require('fs');
 const GITHUB_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 const OWNER = 'pharmcoder-kr';
 const REPO = 'prescription_printer_parsing';
-const VERSION = '1.2.1';
+const VERSION = '1.2.2';
 const TAG = `v${VERSION}`;
 
 async function createRelease() {
@@ -14,22 +14,21 @@ async function createRelease() {
     process.exit(1);
   }
 
-  const releaseNotes = `## v1.2.1: 시럽 단일약 봉투 파싱 지원
+  const releaseNotes = `## v1.2.2: PDF 파싱 후 자동 삭제
 
 ### 주요 변경사항
-- **stacked_compact 파서 추가**: 약품명과 용법(535 등)이 여러 줄로 나뉜 FastReport 시럽 단일약 봉투 파싱
-- 약품명 줄바꿈·\`*\` 접두사·3자리 압축 용법(예: 535 = 5mL/3회/5일) 자동 처리
-- 양식 학습 v3에 stacked_compact 구조 자동 감지 추가
+- **파싱 후 PDF 자동 삭제 옵션**: 환경설정에서 활성화 시, 파싱에 성공한 PDF만 지정 폴더에서 자동 삭제
+- 폴더에 PDF가 수천 개 쌓여 디스크·스캔 부담이 커지는 문제 방지
+- 파싱 실패 파일은 삭제하지 않고 남겨 재시도·확인 가능
 
-### 해결된 문제
-- \`Fast Report Document_...pdf\` 형식에서 환자명만 읽히고 약물 0개로 실패하던 문제
-- 「양식 분석 결과가 불완전합니다」 오류 (약물 0개)
+### 설정 방법
+환경설정 → 약봉투 PDF 연동 → **「파싱 후 PDF 자동 삭제」** 체크
 
 ### 설치 방법
 아래의 \`auto-syrup-pdf-setup-${VERSION}.exe\` 파일을 다운로드하여 실행하세요.
 
 ### 업데이트
-v1.2.0 이하 사용자는 프로그램 실행 시 자동 업데이트 알림을 받을 수 있습니다.`;
+v1.2.1 이하 사용자는 프로그램 실행 시 자동 업데이트 알림을 받을 수 있습니다.`;
 
   const filesToUpload = [
     {
@@ -68,7 +67,7 @@ v1.2.0 이하 사용자는 프로그램 실행 시 자동 업데이트 알림을
         `https://api.github.com/repos/${OWNER}/${REPO}/releases`,
         {
           tag_name: TAG,
-          name: `v${VERSION} - 시럽 단일약 봉투 파싱 지원`,
+          name: `v${VERSION} - PDF 파싱 후 자동 삭제`,
           body: releaseNotes,
           draft: false,
           prerelease: false
@@ -101,7 +100,7 @@ v1.2.0 이하 사용자는 프로그램 실행 시 자동 업데이트 알림을
         releaseResponse = await axios.patch(
           `https://api.github.com/repos/${OWNER}/${REPO}/releases/${existing.id}`,
           {
-            name: `v${VERSION} - 시럽 단일약 봉투 파싱 지원`,
+            name: `v${VERSION} - PDF 파싱 후 자동 삭제`,
             body: releaseNotes,
             draft: false,
             prerelease: false

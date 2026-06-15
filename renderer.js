@@ -34,6 +34,7 @@ let autoDispensingQueue = []; // 자동조제 대기열 (처방전 접수번호 
 let connectionCheckIntervalMs = 15000; // 연결 상태 확인 주기 (기본값: 15초)
 let prescriptionProgram = 'pm3000'; // 처방조제프로그램 (기본값: PM3000)
 let prescriptionParseMode = 'emr_file'; // 처방연동 방식 (emr_file | pdf_bag)
+let deletePdfAfterParse = false; // PDF 파싱 성공 후 원본 파일 삭제
 let sentParseEvents = new Set(); // 이미 전송한 파싱 이벤트 (중복 방지)
 let pharmacyStatus = null; // 약국 승인 상태 (null, 'pending', 'active', 'rejected')
 let loginMode = null; // 로그인 모드 ('logged_in', 'no_login', null)
@@ -2242,6 +2243,35 @@ function syncPdfBagIntegrationCheckbox() {
     if (pdfCheckbox) {
         pdfCheckbox.checked = prescriptionParseMode === 'pdf_bag';
     }
+    syncDeletePdfAfterParseCheckbox();
+}
+
+function syncDeletePdfAfterParseCheckbox() {
+    const deleteCheckbox = document.getElementById('deletePdfAfterParse');
+    const deleteHelp = document.getElementById('deletePdfAfterParseHelp');
+    if (deleteCheckbox) {
+        deleteCheckbox.checked = deletePdfAfterParse;
+        deleteCheckbox.disabled = prescriptionParseMode !== 'pdf_bag';
+    }
+    if (deleteHelp) {
+        deleteHelp.style.opacity = prescriptionParseMode === 'pdf_bag' ? '1' : '0.5';
+    }
+}
+
+function tryDeletePrescriptionPdf(filePath) {
+    if (!deletePdfAfterParse || prescriptionParseMode !== 'pdf_bag') {
+        return;
+    }
+    if (!filePath || !fs.existsSync(filePath)) {
+        return;
+    }
+
+    try {
+        fs.unlinkSync(filePath);
+        logMessage(`🗑️ 파싱 완료 PDF 삭제: ${path.basename(filePath)}`);
+    } catch (error) {
+        logMessage(`⚠️ PDF 삭제 실패: ${path.basename(filePath)} - ${error.message}`);
+    }
 }
 
 async function loadPrescriptionProgramSettings() {
@@ -2255,6 +2285,7 @@ async function loadPrescriptionProgramSettings() {
             } else {
                 prescriptionParseMode = settings.prescriptionParseMode || 'emr_file';
             }
+            deletePdfAfterParse = Boolean(settings.deletePdfAfterParse);
             const programSelect = document.getElementById('prescriptionProgram');
             if (programSelect) {
                 programSelect.value = prescriptionProgram;
@@ -2263,10 +2294,12 @@ async function loadPrescriptionProgramSettings() {
             updatePrescriptionPathDescription();
             logMessage(`처방조제프로그램 설정 로드됨: ${prescriptionProgram === 'pm3000' ? 'PM3000, 팜플러스20' : '유팜'}`);
             logMessage(`약봉투 PDF 연동: ${prescriptionParseMode === 'pdf_bag' ? '사용' : '미사용'}`);
+            logMessage(`PDF 파싱 후 자동 삭제: ${deletePdfAfterParse ? '사용' : '미사용'}`);
         } else {
             // 기본값 설정
             prescriptionProgram = 'pm3000';
             prescriptionParseMode = 'emr_file';
+            deletePdfAfterParse = false;
             const programSelect = document.getElementById('prescriptionProgram');
             if (programSelect) {
                 programSelect.value = prescriptionProgram;
@@ -2280,6 +2313,7 @@ async function loadPrescriptionProgramSettings() {
         // 오류 발생 시 기본값 설정
         prescriptionProgram = 'pm3000';
         prescriptionParseMode = 'emr_file';
+        deletePdfAfterParse = false;
         const programSelect = document.getElementById('prescriptionProgram');
         if (programSelect) {
             programSelect.value = prescriptionProgram;
@@ -2295,12 +2329,14 @@ async function savePrescriptionProgramSettings() {
         const settings = {
             prescriptionProgram: prescriptionProgram,
             pdfBagIntegration: prescriptionParseMode === 'pdf_bag',
-            prescriptionParseMode: prescriptionParseMode
+            prescriptionParseMode: prescriptionParseMode,
+            deletePdfAfterParse: deletePdfAfterParse
         };
         const filePath = await getConfigFilePath('prescription_program_settings.json');
         fs.writeFileSync(filePath, JSON.stringify(settings, null, 2));
         logMessage(`처방조제프로그램 설정 저장됨: ${prescriptionProgram === 'pm3000' ? 'PM3000, 팜플러스20' : '유팜'}`);
         logMessage(`약봉투 PDF 연동 저장됨: ${prescriptionParseMode === 'pdf_bag' ? '사용' : '미사용'}`);
+        logMessage(`PDF 파싱 후 자동 삭제 저장됨: ${deletePdfAfterParse ? '사용' : '미사용'}`);
     } catch (error) {
         logMessage(`처방조제프로그램 설정 저장 중 오류: ${error.message}`);
     }
@@ -2343,6 +2379,20 @@ async function onPdfBagIntegrationChanged() {
     await parseAllPrescriptionFiles();
     startPrescriptionMonitor();
 }
+
+async function onDeletePdfAfterParseChanged() {
+    const deleteCheckbox = document.getElementById('deletePdfAfterParse');
+    if (!deleteCheckbox || prescriptionParseMode !== 'pdf_bag') {
+        syncDeletePdfAfterParseCheckbox();
+        return;
+    }
+
+    deletePdfAfterParse = deleteCheckbox.checked;
+    await savePrescriptionProgramSettings();
+    logMessage(`PDF 파싱 후 자동 삭제 ${deletePdfAfterParse ? '활성화' : '비활성화'}`);
+}
+
+window.onDeletePdfAfterParseChanged = onDeletePdfAfterParseChanged;
 
 // 처방전 파일 파싱
 async function parseAllPrescriptionFiles() {
@@ -2569,6 +2619,7 @@ async function parsePrescriptionFile(filePath) {
             parsedFiles.add(filePath);
             saveParsedFiles();
             logMessage(`PDF 파싱 완료: ${path.basename(filePath)} → ${receiptNumber} (환자: ${parsed.patientName}, 약물 ${medicines.length}개)`);
+            tryDeletePrescriptionPdf(filePath);
             return receiptNumber;
         } catch (error) {
             logMessage(`PDF 파싱 중 오류: ${path.basename(filePath)} - ${error.message}`);
