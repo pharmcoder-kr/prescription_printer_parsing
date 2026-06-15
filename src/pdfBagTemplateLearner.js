@@ -6,42 +6,53 @@ const {
     extractPrescriptionNo,
     extractReceiptDate,
     finalizeBagParseResult,
-    isTestPdf
+    isTestPdf,
+    cleanDrugName,
+    DRUG_KEYWORD_PATTERN
 } = require('./pdfBagParser');
 
-const HEADER_KEYWORDS = ['약품명', '투약량', '횟수', '일수', '총투', '1회투약량', '1일투여횟수', '총투약일수'];
-const DEFAULT_FOOTER_KEYWORDS = ['본인의 약', '처방조제된 약', '복약안내'];
-const DEFAULT_STOP_PATTERNS = ['^\\[', '정씩\\d+회', '^적색', '^흰색', '^분홍', '^연분홍'];
+const HEADER_VOCAB = [
+    '약품명', '약품', '투약량', '1회투약량', '횟수', '1일투여횟수', '일수', '총투약일수', '총투', '용량', '회', '분'
+];
+const DEFAULT_FOOTER_KEYWORDS = ['본인의 약', '처방조제된 약', '복약안내', '처방조제'];
+const DEFAULT_STOP_PATTERNS = ['^\\[', '정씩\\d+회', '^적색', '^흰색', '^분홍', '^연분홍', '^분홍색', '^연분홍색'];
 
-function countHeaderKeywordHits(line) {
-    const compact = line.replace(/\s+/g, '');
-    return HEADER_KEYWORDS.filter((kw) => compact.includes(kw.replace(/\s+/g, ''))).length;
+function compactLine(line) {
+    return String(line || '').replace(/\s+/g, '');
 }
 
-function findLearnedHeaderIndex(lines, minHits = 2) {
+function countHeaderScore(line) {
+    const compact = compactLine(line);
+    return HEADER_VOCAB.filter((kw) => compact.includes(kw.replace(/\s+/g, ''))).length;
+}
+
+function findBestHeaderLine(lines, minScore = 2) {
     let bestIdx = -1;
-    let bestHits = 0;
+    let bestScore = 0;
     for (let i = 0; i < lines.length; i++) {
-        const hits = countHeaderKeywordHits(lines[i]);
-        if (hits >= minHits && hits >= bestHits) {
-            bestHits = hits;
+        const score = countHeaderScore(lines[i]);
+        if (score >= minScore && score >= bestScore) {
+            bestScore = score;
             bestIdx = i;
         }
     }
-    return bestIdx;
+    return { index: bestIdx, score: bestScore, fingerprint: bestIdx >= 0 ? compactLine(lines[bestIdx]) : '' };
 }
 
-function extractHeaderKeywords(line) {
-    const compact = line.replace(/\s+/g, '');
-    return HEADER_KEYWORDS.filter((kw) => compact.includes(kw.replace(/\s+/g, '')));
+function headerLineMatches(line, learned) {
+    const compact = compactLine(line);
+    if (learned.headerFingerprint && compact.includes(learned.headerFingerprint.slice(0, Math.min(8, learned.headerFingerprint.length)))) {
+        return true;
+    }
+    return countHeaderScore(line) >= (learned.headerMinScore || 2);
 }
 
 function isFooterLine(line, footerKeywords) {
-    return footerKeywords.some((kw) => line.includes(kw));
+    return (footerKeywords || DEFAULT_FOOTER_KEYWORDS).some((kw) => line.includes(kw));
 }
 
 function isStopLine(line, stopPatterns) {
-    return stopPatterns.some((pattern) => new RegExp(pattern, 'i').test(line));
+    return (stopPatterns || DEFAULT_STOP_PATTERNS).some((pattern) => new RegExp(pattern, 'i').test(line));
 }
 
 function isDrugCandidateLine(line) {
@@ -53,11 +64,23 @@ function isDrugCandidateLine(line) {
     if (/^[0-9,.\s]+$/.test(trimmed)) return false;
     if (!/[가-힣A-Za-z]/.test(trimmed)) return false;
     if (!/\d/.test(trimmed)) return false;
-    if (/의원|병원|약국|조제약사/.test(trimmed)) return false;
+    if (/의원|병원|약국|조제약사|가정의학과|통증의학과/.test(trimmed)) return false;
     return true;
 }
 
-function cleanLearnedDrugName(raw, doseInName) {
+function splitTrailingNumbers(line) {
+    const tokens = line.trim().split(/\s+/);
+    const numericTail = [];
+    while (tokens.length > 0 && /^\d+(\.\d+)?$/.test(tokens[tokens.length - 1])) {
+        numericTail.unshift(parseFloat(tokens.pop()));
+    }
+    return {
+        namePart: tokens.join(' ').trim(),
+        numericTail
+    };
+}
+
+function cleanGenericDrugName(raw, doseInName) {
     let name = String(raw || '').trim();
     if (doseInName) {
         name = name.replace(/(\d+\/\d+(?:\.\d+)?m?g?)$/i, '').trim();
@@ -77,99 +100,103 @@ function extractDoseFromName(raw) {
     return 1;
 }
 
-function parseTrailingNumberRow(line, rowParser) {
-    const trimmed = line.trim();
-    if (!trimmed) return null;
+function inferRowFormatFromSamples(sampleLines) {
+    const tails = sampleLines.map((line) => splitTrailingNumbers(line).numericTail);
+    const counts = tails.map((t) => t.length).filter((n) => n >= 2);
+    if (!counts.length) return null;
 
-    const fourNums = trimmed.match(/^(.+?)\s+(\d+(?:\.\d+)?)\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s*$/);
-    if (fourNums && rowParser.trailingCount >= 4) {
-        const namePart = fourNums[1].trim();
-        return {
-            pill_name: cleanLearnedDrugName(namePart, rowParser.doseInName),
-            volume: parseFloat(fourNums[2]),
-            daily: parseFloat(fourNums[3]),
-            period: parseFloat(fourNums[4]),
-            total: parseFloat(fourNums[5])
-        };
-    }
+    const countFreq = {};
+    counts.forEach((n) => { countFreq[n] = (countFreq[n] || 0) + 1; });
+    const trailingNumericCount = Number(Object.entries(countFreq).sort((a, b) => b[1] - a[1])[0][0]);
 
-    const threeNums = trimmed.match(/^(.+?)\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s*$/);
-    if (!threeNums) return null;
+    let embedded = 0;
+    sampleLines.forEach((line) => {
+        const { namePart, numericTail } = splitTrailingNumbers(line);
+        if (numericTail.length === trailingNumericCount && /(\d+(?:\.\d+)?(?:mg|m|%)?|\d+\/\d+)/i.test(namePart)) {
+            embedded++;
+        }
+    });
 
-    const namePart = threeNums[1].trim();
-    if (rowParser.doseInName) {
-        return {
-            pill_name: cleanLearnedDrugName(namePart, true),
-            volume: extractDoseFromName(namePart),
-            daily: parseFloat(threeNums[2]),
-            period: parseFloat(threeNums[3]),
-            total: parseFloat(threeNums[4])
-        };
-    }
-
-    const volume = parseFloat(threeNums[2]);
-    const daily = parseFloat(threeNums[3]);
-    const period = parseFloat(threeNums[4]);
     return {
-        pill_name: cleanLearnedDrugName(namePart, false),
-        volume,
-        daily,
-        period,
-        total: volume * daily * period
+        trailingNumericCount,
+        doseEmbeddedInName: trailingNumericCount <= 3 && embedded >= Math.max(1, Math.floor(sampleLines.length / 2)),
+        explicitTotalColumn: trailingNumericCount >= 3
     };
 }
 
-function inferRowParser(sampleLines) {
-    let three = 0;
-    let four = 0;
-    let embedded = 0;
+function mapTrailingToDosage(namePart, numericTail, rowFormat) {
+    if (!numericTail.length) return null;
 
-    for (const line of sampleLines) {
-        if (/^(.+?)\s+(\d+(?:\.\d+)?)\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s*$/.test(line)) {
-            four++;
-        } else if (/^(.+?)\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s*$/.test(line)) {
-            three++;
-            const namePart = line.match(/^(.+?)\s+(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s*$/)[1];
-            if (/(\d+(?:\.\d+)?(?:mg|m|%)?|\d+\/\d+)/i.test(namePart)) embedded++;
+    const count = rowFormat.trailingNumericCount || numericTail.length;
+    const nums = numericTail.slice(-count);
+    if (nums.length < 2) return null;
+
+    if (count >= 4) {
+        return {
+            pill_name: cleanGenericDrugName(namePart, rowFormat.doseEmbeddedInName),
+            volume: nums[0],
+            daily: nums[1],
+            period: nums[2],
+            total: nums[3]
+        };
+    }
+
+    if (count === 3) {
+        if (rowFormat.doseEmbeddedInName) {
+            return {
+                pill_name: cleanGenericDrugName(namePart, true),
+                volume: extractDoseFromName(namePart),
+                daily: nums[0],
+                period: nums[1],
+                total: nums[2]
+            };
+        }
+        return {
+            pill_name: cleanGenericDrugName(namePart, false),
+            volume: nums[0],
+            daily: nums[1],
+            period: nums[2],
+            total: nums[0] * nums[1] * nums[2]
+        };
+    }
+
+    if (count === 2) {
+        return {
+            pill_name: cleanGenericDrugName(namePart, rowFormat.doseEmbeddedInName),
+            volume: rowFormat.doseEmbeddedInName ? extractDoseFromName(namePart) : nums[0],
+            daily: nums[0],
+            period: nums[1],
+            total: nums[0] * nums[1]
+        };
+    }
+
+    return null;
+}
+
+function parseGenericRow(line, rowFormat) {
+    const { namePart, numericTail } = splitTrailingNumbers(line);
+    if (!namePart || !numericTail.length) return null;
+    return mapTrailingToDosage(namePart, numericTail, rowFormat);
+}
+
+function collectRowsAfterHeader(lines, region, rowFormat) {
+    let headerIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+        if (headerLineMatches(lines[i], region)) {
+            headerIdx = i;
+            break;
         }
     }
-
-    const trailingCount = four > 0 && four >= three ? 4 : 3;
-    return {
-        type: 'trailing_numbers',
-        trailingCount,
-        doseInName: trailingCount === 3 && embedded >= Math.max(1, Math.floor(three / 2)),
-        useExplicitTotal: trailingCount === 4 || three > 0
-    };
-}
-
-function collectHeaderTableDrugLines(lines, headerIdx, footerKeywords, stopPatterns) {
-    const sample = [];
-    for (let i = headerIdx + 1; i < lines.length; i++) {
-        const line = lines[i];
-        if (isFooterLine(line, footerKeywords)) break;
-        if (isStopLine(line, stopPatterns)) break;
-        if (!isDrugCandidateLine(line)) continue;
-        sample.push(line);
-    }
-    return sample;
-}
-
-function parseHeaderTableWithRules(lines, rules) {
-    const headerIdx = findLearnedHeaderIndex(lines, rules.headerMinKeywordCount || 2);
     if (headerIdx < 0) return [];
 
     const items = [];
-    const footerKeywords = rules.footerKeywords || DEFAULT_FOOTER_KEYWORDS;
-    const stopPatterns = rules.stopLinePatterns || DEFAULT_STOP_PATTERNS;
-
     for (let i = headerIdx + 1; i < lines.length; i++) {
         const line = lines[i];
-        if (isFooterLine(line, footerKeywords)) break;
-        if (isStopLine(line, stopPatterns)) break;
+        if (isFooterLine(line, region.footerKeywords)) break;
+        if (isStopLine(line, region.stopPatterns)) break;
         if (!isDrugCandidateLine(line)) continue;
 
-        const parsed = parseTrailingNumberRow(line, rules.rowParser);
+        const parsed = parseGenericRow(line, rowFormat);
         if (!parsed || !parsed.pill_name || !parsed.daily || !parsed.period) continue;
 
         items.push({
@@ -182,28 +209,51 @@ function parseHeaderTableWithRules(lines, rules) {
             line_number: items.length + 1
         });
     }
-
     return items;
 }
 
-function findColumnMatrixHeaderIndex(lines) {
-    for (let i = 0; i < lines.length; i++) {
-        const compact = lines[i].replace(/\s+/g, '');
-        if (/일수.*횟수.*투약량.*약품명|투약량.*횟수.*일수|일수횟수투약량약품명/.test(compact)) {
-            return i;
-        }
+function inferMatrixColumnOrder(headerLine) {
+    const compact = compactLine(headerLine);
+    const specs = [
+        { key: 'period', tokens: ['일수', '총투약일수', '총투'] },
+        { key: 'daily', tokens: ['횟수', '1일투여횟수'] },
+        { key: 'volume', tokens: ['투약량', '1회투약량'] }
+    ];
+
+    const positions = [];
+    specs.forEach((spec) => {
+        let best = -1;
+        spec.tokens.forEach((token) => {
+            const idx = compact.indexOf(token);
+            if (idx >= 0 && (best < 0 || idx < best)) best = idx;
+        });
+        if (best >= 0) positions.push({ key: spec.key, pos: best });
+    });
+
+    if (positions.length < 2) {
+        return ['period', 'daily', 'volume'];
     }
-    return -1;
+
+    return positions.sort((a, b) => a.pos - b.pos).map((p) => p.key);
 }
 
-function learnColumnMatrixRules(lines) {
-    const headerIdx = findColumnMatrixHeaderIndex(lines);
-    if (headerIdx < 0) return null;
+function collectMatrixBeforeHeader(lines, region) {
+    let headerIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+        if (headerLineMatches(lines[i], region)) {
+            headerIdx = i;
+            break;
+        }
+    }
+    if (headerIdx < 0) return [];
 
+    const columnOrder = region.matrixColumnOrder || inferMatrixColumnOrder(lines[headerIdx]);
     let idx = headerIdx - 1;
     const drugRaw = [];
     while (idx >= 0 && !/^\d+(\.\d+)?$/.test(lines[idx])) {
-        drugRaw.unshift(lines[idx]);
+        if (isDrugCandidateLine(lines[idx]) || /[가-힣]/.test(lines[idx])) {
+            drugRaw.unshift(lines[idx]);
+        }
         idx--;
     }
 
@@ -213,106 +263,243 @@ function learnColumnMatrixRules(lines) {
         idx--;
     }
 
-    if (numericValues.length < 3) return null;
+    if (numericValues.length < 3 || drugRaw.length === 0) return [];
+
+    const colCount = Math.floor(numericValues.length / 3);
+    if (colCount < 1) return [];
+
+    const matrix = { period: [], daily: [], volume: [] };
+    const rowSize = colCount;
+    columnOrder.forEach((key, rowIndex) => {
+        const start = rowIndex * rowSize;
+        matrix[key] = numericValues.slice(start, start + rowSize);
+    });
+
+    const drugNames = [];
+    const drugKeyword = new RegExp(DRUG_KEYWORD_PATTERN);
+    let buffer = '';
+    for (const line of drugRaw) {
+        buffer += line;
+        if (drugKeyword.test(buffer) || /정|캡슐|시럽|현탁|로션|액|연고/.test(buffer)) {
+            const cleaned = cleanDrugName(buffer);
+            if (cleaned.length >= 2) drugNames.push(cleaned);
+            buffer = '';
+        }
+    }
+    if (buffer) {
+        const cleaned = cleanDrugName(buffer);
+        if (cleaned.length >= 2) drugNames.push(cleaned);
+    }
+
+    const count = Math.min(drugNames.length, matrix.volume.length, matrix.daily.length, matrix.period.length);
+    const items = [];
+    for (let i = 0; i < count; i++) {
+        const volume = matrix.volume[i];
+        const daily = matrix.daily[i];
+        const period = matrix.period[i];
+        if (!volume || !daily || !period) continue;
+        items.push({
+            pill_code: '',
+            pill_name: drugNames[i],
+            volume,
+            daily,
+            period,
+            total: volume * daily * period,
+            line_number: items.length + 1
+        });
+    }
+    return items;
+}
+
+function collectLabeledBlocks(lines) {
+    const drugKeyword = new RegExp(DRUG_KEYWORD_PATTERN);
+    const items = [];
+    const seen = new Set();
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!drugKeyword.test(line) && !/정\d|시럽|현탁|로션/.test(line)) continue;
+        if (line.includes('1회투약량')) continue;
+
+        const pillName = cleanDrugName(line);
+        if (!pillName || pillName.length < 2) continue;
+
+        let volume;
+        let daily;
+        let period;
+
+        for (let j = i; j < Math.min(i + 20, lines.length); j++) {
+            const scan = lines[j];
+            const vol = scan.match(/1회투약량\s*(\d+(?:\.\d+)?)/);
+            if (vol) volume = parseFloat(vol[1]);
+            const freq = scan.match(/1일투여횟수\s*(\d+(?:\.\d+)?)/);
+            if (freq) daily = parseFloat(freq[1]);
+            const days = scan.match(/총투약일수\s*(\d+(?:\.\d+)?)/);
+            if (days) period = parseFloat(days[1]);
+            if (/^1회투약량\s*$/.test(scan) && j + 1 < lines.length) {
+                const v = lines[j + 1].match(/^(\d+(?:\.\d+)?)/);
+                if (v) volume = parseFloat(v[1]);
+            }
+            if (/^1일투여횟수\s*$/.test(scan) && j + 1 < lines.length) {
+                const v = lines[j + 1].match(/^(\d+(?:\.\d+)?)/);
+                if (v) daily = parseFloat(v[1]);
+            }
+            if (/^총투약일수\s*$/.test(scan) && j + 1 < lines.length) {
+                const v = lines[j + 1].match(/^(\d+(?:\.\d+)?)/);
+                if (v) period = parseFloat(v[1]);
+            }
+            if (volume > 0 && daily > 0 && period > 0) break;
+        }
+
+        if (!volume || !daily || !period) continue;
+        const key = `${pillName}|${volume}|${daily}|${period}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        items.push({
+            pill_code: '',
+            pill_name: pillName,
+            volume,
+            daily,
+            period,
+            total: volume * daily * period,
+            line_number: items.length + 1
+        });
+    }
+    return items;
+}
+
+function learnRowsAfterHeader(lines) {
+    const header = findBestHeaderLine(lines, 2);
+    if (header.index < 0) return null;
+
+    const sampleLines = [];
+    for (let i = header.index + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (isFooterLine(line)) break;
+        if (isStopLine(line)) break;
+        if (!isDrugCandidateLine(line)) continue;
+        sampleLines.push(line);
+    }
+    if (!sampleLines.length) return null;
+
+    const rowFormat = inferRowFormatFromSamples(sampleLines);
+    if (!rowFormat) return null;
 
     return {
-        strategy: 'column_matrix',
-        headerPattern: '일수횟수투약량약품명',
-        numericCount: numericValues.length,
-        sampleDrugLines: drugRaw.slice(0, 8)
+        regionType: 'rows_after_header',
+        headerFingerprint: header.fingerprint,
+        headerMinScore: Math.min(2, header.score),
+        footerKeywords: [...DEFAULT_FOOTER_KEYWORDS],
+        stopPatterns: [...DEFAULT_STOP_PATTERNS],
+        rowFormat,
+        sampleDrugLines: sampleLines.slice(0, 8)
     };
 }
 
-function learnHeaderTableRules(lines) {
-    const headerIdx = findLearnedHeaderIndex(lines, 2);
-    if (headerIdx < 0) return null;
+function learnMatrixBeforeHeader(lines) {
+    const header = findBestHeaderLine(lines, 2);
+    if (header.index < 0) return null;
 
-    const footerKeywords = [...DEFAULT_FOOTER_KEYWORDS];
-    const sampleDrugLines = collectHeaderTableDrugLines(lines, headerIdx, footerKeywords, DEFAULT_STOP_PATTERNS);
-    if (!sampleDrugLines.length) return null;
+    const compact = header.fingerprint;
+    if (!/일수|횟수|투약/.test(compact)) return null;
 
-    const rowParser = inferRowParser(sampleDrugLines);
+    let idx = header.index - 1;
+    let numericCount = 0;
+    while (idx >= 0 && /^\d+(\.\d+)?$/.test(lines[idx])) {
+        numericCount++;
+        idx--;
+    }
+    if (numericCount < 3 || numericCount % 3 !== 0) return null;
+
     return {
-        strategy: 'header_table',
-        headerKeywords: extractHeaderKeywords(lines[headerIdx]),
-        headerMinKeywordCount: Math.min(2, extractHeaderKeywords(lines[headerIdx]).length),
-        footerKeywords,
-        stopLinePatterns: DEFAULT_STOP_PATTERNS,
-        rowParser,
-        sampleDrugLines: sampleDrugLines.slice(0, 8)
+        regionType: 'matrix_before_header',
+        headerFingerprint: header.fingerprint,
+        headerMinScore: Math.min(2, header.score),
+        matrixColumnOrder: inferMatrixColumnOrder(lines[header.index]),
+        footerKeywords: [...DEFAULT_FOOTER_KEYWORDS],
+        stopPatterns: [...DEFAULT_STOP_PATTERNS]
     };
 }
 
-function learnLabelBlockRules(lines) {
+function learnLabeledBlocks(lines) {
     const joined = lines.join('\n');
     if (!/1회투약량/i.test(joined) || !/1일투여횟수/i.test(joined) || !/총투약일수/i.test(joined)) {
         return null;
     }
     return {
-        strategy: 'label_block',
-        labels: ['1회투약량', '1일투여횟수', '총투약일수']
+        regionType: 'labeled_blocks',
+        headerFingerprint: '',
+        headerMinScore: 0,
+        footerKeywords: [...DEFAULT_FOOTER_KEYWORDS],
+        stopPatterns: [...DEFAULT_STOP_PATTERNS]
     };
 }
 
-function learnBagTemplate(text, fileName = '') {
-    const normalized = normalizeText(text);
-    const lines = normalizeLines(text);
+function parseWithLearnedRules(lines, learned) {
+    if (!learned) return [];
 
-    const candidates = [
-        learnHeaderTableRules(lines),
-        learnColumnMatrixRules(lines),
-        learnLabelBlockRules(lines)
+    if (learned.regionType === 'rows_after_header' || learned.strategy === 'header_table') {
+        return collectRowsAfterHeader(lines, learned, learned.rowFormat || inferRowParserCompat(learned));
+    }
+    if (learned.regionType === 'matrix_before_header' || learned.strategy === 'column_matrix') {
+        return collectMatrixBeforeHeader(lines, learned);
+    }
+    if (learned.regionType === 'labeled_blocks' || learned.strategy === 'label_block') {
+        return collectLabeledBlocks(lines);
+    }
+    return [];
+}
+
+function inferRowParserCompat(learned) {
+    if (learned.rowFormat) return learned.rowFormat;
+    if (learned.rowParser) {
+        return {
+            trailingNumericCount: learned.rowParser.trailingCount,
+            doseEmbeddedInName: learned.rowParser.doseInName,
+            explicitTotalColumn: learned.rowParser.useExplicitTotal
+        };
+    }
+    return { trailingNumericCount: 3, doseEmbeddedInName: true, explicitTotalColumn: true };
+}
+
+function tryAutoGenericParse(lines) {
+    const hypotheses = [
+        learnRowsAfterHeader(lines),
+        learnMatrixBeforeHeader(lines),
+        learnLabeledBlocks(lines)
     ].filter(Boolean);
 
-    let bestRules = null;
-    let bestMedicines = [];
-
-    for (const rules of candidates) {
-        const medicines = parseWithLearnedRules(lines, rules);
-        if (medicines.length > bestMedicines.length) {
-            bestMedicines = medicines;
-            bestRules = rules;
+    let best = [];
+    let bestLearned = null;
+    for (const learned of hypotheses) {
+        const meds = parseWithLearnedRules(lines, learned);
+        if (meds.length > best.length) {
+            best = meds;
+            bestLearned = learned;
         }
     }
+    return { medicines: best, learned: bestLearned };
+}
 
-    if (!bestRules || !bestMedicines.length) {
-        return null;
-    }
+function learnBagTemplate(text, fileName = '') {
+    const lines = normalizeLines(text);
+    const { medicines, learned } = tryAutoGenericParse(lines);
+    if (!learned || !medicines.length) return null;
 
     return {
-        templateVersion: 2,
+        templateVersion: 3,
         sourceFileName: fileName,
         registeredAt: new Date().toISOString(),
-        learned: bestRules,
+        learned,
         patientNamePatterns: DEFAULT_PARSER.patientNamePatterns,
         prescriptionNoPattern: DEFAULT_PARSER.prescriptionNoPattern
     };
 }
 
-function parseWithLearnedRules(lines, rules) {
-    if (!rules) return [];
-
-    switch (rules.strategy) {
-        case 'header_table':
-            return parseHeaderTableWithRules(lines, rules);
-        case 'column_matrix': {
-            const { extractItemsColumnTable } = require('./pdfBagParser');
-            return extractItemsColumnTable(lines);
-        }
-        case 'label_block': {
-            const { extractItemsPerDrugBlock, extractItemsInline } = require('./pdfBagParser');
-            const block = extractItemsPerDrugBlock(lines);
-            return block.length ? block : extractItemsInline(lines);
-        }
-        default:
-            return [];
-    }
-}
-
 function parseBagTextWithLearnedTemplate(text, template, filePath = '') {
     const normalized = normalizeText(text);
     const lines = normalizeLines(text);
-    const rules = template.learned;
+    const learned = template.learned;
 
     if (isTestPdf(normalized)) {
         return {
@@ -331,14 +518,54 @@ function parseBagTextWithLearnedTemplate(text, template, filePath = '') {
     const patientName = extractPatientName(normalized, patientPatterns, lines);
     const prescriptionNo = extractPrescriptionNo(normalized, prescriptionPattern);
     const receiptDate = extractReceiptDate(normalized, prescriptionNo, filePath);
-    const medicines = parseWithLearnedRules(lines, rules);
+
+    let medicines = parseWithLearnedRules(lines, learned);
+    let parserUsed = `generic_${learned.regionType || learned.strategy || 'unknown'}`;
+
+    if (!medicines.length) {
+        const auto = tryAutoGenericParse(lines);
+        medicines = auto.medicines;
+        if (medicines.length) {
+            parserUsed = `generic_auto_${auto.learned?.regionType || 'retry'}`;
+        }
+    }
 
     return finalizeBagParseResult({
         patientName,
         prescriptionNo,
         receiptDate,
         medicines,
-        parserUsed: `learned_${rules.strategy}`,
+        parserUsed,
+        rawText: text
+    });
+}
+
+function parseBagTextGenericAuto(text, filePath = '') {
+    const normalized = normalizeText(text);
+    const lines = normalizeLines(text);
+
+    if (isTestPdf(normalized)) {
+        return finalizeBagParseResult({
+            patientName: null,
+            prescriptionNo: null,
+            receiptDate: null,
+            medicines: [],
+            parserUsed: 'test_skip',
+            rawText: text
+        });
+    }
+
+    const patientName = extractPatientName(normalized, DEFAULT_PARSER.patientNamePatterns, lines);
+    const prescriptionNo = extractPrescriptionNo(normalized, DEFAULT_PARSER.prescriptionNoPattern);
+    const receiptDate = extractReceiptDate(normalized, prescriptionNo, filePath);
+    const { medicines, learned } = tryAutoGenericParse(lines);
+
+    return finalizeBagParseResult({
+        patientName,
+        prescriptionNo,
+        receiptDate,
+        medicines,
+        parserUsed: learned ? `generic_auto_${learned.regionType}` : 'generic_auto_none',
         rawText: text
     });
 }
@@ -355,8 +582,10 @@ function scoreLearnedTemplate(text, template, filePath = '') {
 module.exports = {
     learnBagTemplate,
     parseBagTextWithLearnedTemplate,
+    parseBagTextGenericAuto,
     parseWithLearnedRules,
     scoreLearnedTemplate,
-    findLearnedHeaderIndex,
-    inferRowParser
+    tryAutoGenericParse,
+    splitTrailingNumbers,
+    inferRowFormatFromSamples
 };

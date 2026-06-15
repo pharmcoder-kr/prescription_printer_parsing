@@ -795,7 +795,7 @@ function parseBagText(text, parserConfig = DEFAULT_PARSER, filePath = '') {
     const config = { ...DEFAULT_PARSER, ...parserConfig };
 
     if (config.customTemplate) {
-        if (config.customTemplate.templateVersion >= 2 && config.customTemplate.learned) {
+        if (config.customTemplate.learned) {
             const { parseBagTextWithLearnedTemplate } = require('./pdfBagTemplateLearner');
             const learnedResult = parseBagTextWithLearnedTemplate(text, config.customTemplate, filePath);
             if (learnedResult.parseSuccess) {
@@ -827,6 +827,12 @@ function parseBagText(text, parserConfig = DEFAULT_PARSER, filePath = '') {
     const patientName = extractPatientName(normalized, config.patientNamePatterns || [], lines);
     const prescriptionNo = extractPrescriptionNo(normalized, config.prescriptionNoPattern);
     const receiptDate = extractReceiptDate(normalized, prescriptionNo, filePath);
+
+    const { parseBagTextGenericAuto } = require('./pdfBagTemplateLearner');
+    const autoGeneric = parseBagTextGenericAuto(text, filePath);
+    if (autoGeneric.parseSuccess) {
+        return autoGeneric;
+    }
 
     const strategies = [
         ['ubcare_table', extractItemsUbcareTable],

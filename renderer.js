@@ -2134,7 +2134,14 @@ function updatePdfBagTemplateStatus() {
             fileLabel.textContent = `등록된 양식: ${pdfBagTemplate.sourceFileName || '알 수 없음'} (${pdfBagTemplate.registeredAt ? pdfBagTemplate.registeredAt.substring(0, 10) : ''})`;
         }
         if (statusEl) {
-            if (pdfBagTemplate.templateVersion >= 2 && pdfBagTemplate.learned) {
+            if (pdfBagTemplate.templateVersion >= 3 && pdfBagTemplate.learned) {
+                const regionLabel = {
+                    rows_after_header: '표 형식 (헤더 아래 약물 행)',
+                    matrix_before_header: '세로 열 형식 (헤더 위 숫자 블록)',
+                    labeled_blocks: '용법 라벨 블록 형식'
+                }[pdfBagTemplate.learned.regionType || pdfBagTemplate.learned.strategy] || '자동 학습';
+                statusEl.textContent = `학습된 양식 (v3): ${regionLabel} — 샘플 PDF 구조를 저장해 동일 양식을 파싱합니다.`;
+            } else if (pdfBagTemplate.templateVersion >= 2 && pdfBagTemplate.learned) {
                 const strategyLabel = {
                     header_table: '표 헤더형 (약품명·투약량·횟수·일수)',
                     column_matrix: '세로 열형 (일수/횟수/투약량)',

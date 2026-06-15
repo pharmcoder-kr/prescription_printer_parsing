@@ -4,7 +4,7 @@ const fs = require('fs');
 const GITHUB_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 const OWNER = 'pharmcoder-kr';
 const REPO = 'prescription_printer_parsing';
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const TAG = `v${VERSION}`;
 
 async function createRelease() {
@@ -14,25 +14,24 @@ async function createRelease() {
     process.exit(1);
   }
 
-  const releaseNotes = `## v1.1.0: 약봉투 양식 학습 및 UBCARE 지원
+  const releaseNotes = `## v1.2.0: 범용 약봉투 파서 (v3) — 양식 등록 없이 자동 파싱
 
 ### 주요 변경사항
-- **약봉투 양식 학습 (v2)**: 샘플 PDF 1장 업로드 시 표 구조·약물 행 패턴을 자동 학습하여 같은 양식 PDF 파싱 (앱 업데이트 없이 신규 양식 대응)
-- **UBCARE 약봉투 지원**: 유비케어(UBCARE) 표 헤더형 양식 파싱 추가
-- **실시간 PDF 감시 개선**: 파일 쓰기 완료 대기, 중복 감지 방지, 실패 시 재시도
-- **접수번호·환자명 파싱 개선**: 상·하단 접수번호 불일치, 자릿수 긴 번호 대응
+- **범용 구조 추론 파서 (v3)**: 내장 유형 이름에 의존하지 않고 PDF에서 헤더·약물 행·숫자 열을 자동 추론
+- **양식 미등록 시 자동 파싱**: UBCARE 등 새 약봉투도 샘플 등록·앱 업데이트 없이 파싱 시도
+- **동적 숫자 열 분리**: 약물 행 끝 숫자 2~4열을 자동 판별, 용량이 약품명에 붙었는지도 추론
+- **양식 학습 v3**: 샘플 PDF 등록 시 헤더 지문·행 패턴을 저장해 동일 양식 안정 파싱
 
-### 약봉투 양식 학습 사용법
-1. 환경설정 → 약봉투 양식 입력
-2. 해당 약국의 약봉투 PDF 샘플 1장 선택
-3. 「양식 분석 및 저장」 클릭
-4. 이후 같은 프로그램에서 출력되는 PDF는 자동 파싱
+### 지원 구조 (자동 감지)
+- 헤더 아래 약물 행 표 (UBCARE 등)
+- 헤더 위 숫자 블록 + 약품명 (FastReport 등)
+- 1회투약량 / 1일투여횟수 / 총투약일수 라벨 블록
 
 ### 설치 방법
 아래의 \`auto-syrup-pdf-setup-${VERSION}.exe\` 파일을 다운로드하여 실행하세요.
 
 ### 업데이트
-기존 v1.0.0 사용자는 프로그램 실행 시 자동 업데이트 알림을 받을 수 있습니다.`;
+v1.1.0 이하 사용자는 프로그램 실행 시 자동 업데이트 알림을 받을 수 있습니다.`;
 
   const filesToUpload = [
     {
@@ -71,7 +70,7 @@ async function createRelease() {
         `https://api.github.com/repos/${OWNER}/${REPO}/releases`,
         {
           tag_name: TAG,
-          name: `v${VERSION} - 약봉투 양식 학습 및 UBCARE 지원`,
+          name: `v${VERSION} - 범용 약봉투 파서 (v3)`,
           body: releaseNotes,
           draft: false,
           prerelease: false
@@ -104,7 +103,7 @@ async function createRelease() {
         releaseResponse = await axios.patch(
           `https://api.github.com/repos/${OWNER}/${REPO}/releases/${existing.id}`,
           {
-            name: `v${VERSION} - 약봉투 양식 학습 및 UBCARE 지원`,
+            name: `v${VERSION} - 범용 약봉투 파서 (v3)`,
             body: releaseNotes,
             draft: false,
             prerelease: false
